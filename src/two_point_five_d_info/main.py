@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -31,6 +32,7 @@ def parse_layer(value: str) -> Tuple[str, Optional[Tuple[int, int, int, int]]]:
 
 
 @click.command()
+@click.version_option(version=importlib.metadata.version("two-point-five-d-info"))
 @click.option(
     "-l",
     "--layer",
