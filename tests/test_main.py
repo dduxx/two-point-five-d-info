@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 from PIL import Image
 
-from two_point_five_d_info.main import main, luminance, parse_layer
+from two_point_five_d_info.main import luminance, main, pad, parse_layer, shift_layer
 
 
 def make_image(path, color, width=4, height=4, alpha=255):
@@ -18,19 +18,71 @@ def make_image(path, color, width=4, height=4, alpha=255):
 class TestParseLayer:
     def test_path_only(self):
         result = parse_layer("image.png")
-        assert result == ("image.png", None)
+        assert result == ("image.png", None, (0, 0), (0, 0))
 
     def test_path_with_crop(self):
         result = parse_layer("image.png:10,20,30,40")
-        assert result == ("image.png", (10, 20, 30, 40))
+        assert result == ("image.png", (10, 20, 30, 40), (0, 0), (0, 0))
 
     def test_path_with_spaces_in_crop(self):
         result = parse_layer("image.png:10, 20, 30, 40")
-        assert result == ("image.png", (10, 20, 30, 40))
+        assert result == ("image.png", (10, 20, 30, 40), (0, 0), (0, 0))
 
     def test_invalid_crop_count(self):
         with pytest.raises(click.BadParameter):
             parse_layer("image.png:10,20,30")
+
+    def test_path_with_shift(self):
+        result = parse_layer("image.png@3")
+        assert result == ("image.png", None, (3, 0), (0, 0))
+
+    def test_path_with_negative_shift(self):
+        result = parse_layer("image.png@-2")
+        assert result == ("image.png", None, (-2, 0), (0, 0))
+
+    def test_path_with_vertical_shift(self):
+        result = parse_layer("image.png@0,-2")
+        assert result == ("image.png", None, (0, -2), (0, 0))
+
+    def test_path_with_both_shifts(self):
+        result = parse_layer("image.png@3,-2")
+        assert result == ("image.png", None, (3, -2), (0, 0))
+
+    def test_path_with_crop_and_shift(self):
+        result = parse_layer("image.png:10,20,30,40@-2")
+        assert result == ("image.png", (10, 20, 30, 40), (-2, 0), (0, 0))
+
+    def test_path_with_pad(self):
+        result = parse_layer("image.png#32")
+        assert result == ("image.png", None, (0, 0), (32, 0))
+
+    def test_path_with_both_pads(self):
+        result = parse_layer("image.png#32,32")
+        assert result == ("image.png", None, (0, 0), (32, 32))
+
+    def test_path_with_negative_pad_is_positive(self):
+        result = parse_layer("image.png#-32,-32")
+        assert result == ("image.png", None, (0, 0), (32, 32))
+
+    def test_path_with_crop_pad_shift(self):
+        result = parse_layer("image.png:10,20,30,40#32,0@1,-2")
+        assert result == ("image.png", (10, 20, 30, 40), (1, -2), (32, 0))
+
+    def test_invalid_shift(self):
+        with pytest.raises(click.BadParameter):
+            parse_layer("image.png@abc")
+
+    def test_invalid_shift_count(self):
+        with pytest.raises(click.BadParameter):
+            parse_layer("image.png@1,2,3")
+
+    def test_invalid_pad(self):
+        with pytest.raises(click.BadParameter):
+            parse_layer("image.png#abc")
+
+    def test_invalid_pad_count(self):
+        with pytest.raises(click.BadParameter):
+            parse_layer("image.png#1,2,3")
 
 
 class TestLuminance:
@@ -51,6 +103,86 @@ class TestLuminance:
 
     def test_ascending(self):
         assert luminance("#0000ff") < luminance("#ff0000") < luminance("#00ff00")
+
+
+class TestShiftLayer:
+    def test_zero_is_identity(self):
+        img = make_image_obj((255, 0, 0), width=4, height=3)
+        assert shift_layer(img, 0, 0) is img
+
+    def test_shift_right(self):
+        img = make_image_obj((255, 0, 0), width=4, height=1)
+        out = shift_layer(img, 1, 0)
+        pixels = [out.getpixel((x, 0)) for x in range(4)]
+        assert pixels[0] == (0, 0, 0, 0)
+        assert pixels[1:] == [(255, 0, 0, 255)] * 3
+
+    def test_shift_left(self):
+        img = make_image_obj((0, 255, 0), width=4, height=1)
+        out = shift_layer(img, -1, 0)
+        pixels = [out.getpixel((x, 0)) for x in range(4)]
+        assert pixels[:3] == [(0, 255, 0, 255)] * 3
+        assert pixels[3] == (0, 0, 0, 0)
+
+    def test_shift_down(self):
+        img = make_image_obj((255, 0, 0), width=1, height=4)
+        out = shift_layer(img, 0, 1)
+        pixels = [out.getpixel((0, y)) for y in range(4)]
+        assert pixels[0] == (0, 0, 0, 0)
+        assert pixels[1:] == [(255, 0, 0, 255)] * 3
+
+    def test_shift_up(self):
+        img = make_image_obj((0, 255, 0), width=1, height=4)
+        out = shift_layer(img, 0, -1)
+        pixels = [out.getpixel((0, y)) for y in range(4)]
+        assert pixels[:3] == [(0, 255, 0, 255)] * 3
+        assert pixels[3] == (0, 0, 0, 0)
+
+    def test_shift_beyond_width(self):
+        img = make_image_obj((0, 0, 255), width=2, height=1)
+        out = shift_layer(img, 5, 0)
+        assert all(out.getpixel((x, 0)) == (0, 0, 0, 0) for x in range(2))
+
+    def test_shift_beyond_height(self):
+        img = make_image_obj((0, 0, 255), width=1, height=2)
+        out = shift_layer(img, 0, 5)
+        assert all(out.getpixel((0, y)) == (0, 0, 0, 0) for y in range(2))
+
+
+def make_image_obj(color, width=4, height=4, alpha=255):
+    return Image.new("RGBA", (width, height), (*color, alpha))
+
+
+class TestPad:
+    def test_zero_is_identity(self):
+        img = make_image_obj((255, 0, 0), width=4, height=4)
+        assert pad(img, 0, 0) is img
+
+    def test_pad_x_even(self):
+        img = make_image_obj((255, 0, 0), width=1, height=1)
+        out = pad(img, 2, 0)
+        assert out.size == (3, 1)
+        cols = [out.getpixel((x, 0)) for x in range(3)]
+        assert cols == [(0, 0, 0, 0), (255, 0, 0, 255), (0, 0, 0, 0)]
+
+    def test_pad_x_odd_extra_right(self):
+        img = make_image_obj((255, 0, 0), width=1, height=1)
+        out = pad(img, 3, 0)
+        assert out.size == (4, 1)
+        cols = [out.getpixel((x, 0)) for x in range(4)]
+        assert cols == [(0, 0, 0, 0), (255, 0, 0, 255), (0, 0, 0, 0), (0, 0, 0, 0)]
+
+    def test_pad_y(self):
+        img = make_image_obj((0, 255, 0), width=1, height=1)
+        out = pad(img, 0, 2)
+        assert out.size == (1, 3)
+        rows = [out.getpixel((0, y)) for y in range(3)]
+        assert rows == [(0, 0, 0, 0), (0, 255, 0, 255), (0, 0, 0, 0)]
+
+    def test_pad_both_axes(self):
+        img = make_image_obj((0, 0, 255), width=2, height=2)
+        out = pad(img, 2, 2)
+        assert out.size == (4, 4)
 
 
 class TestCLIIntegration:
@@ -94,6 +226,58 @@ class TestCLIIntegration:
         data = json.loads(Path(out).read_text())
         assert len(data["image"]) == 5
         assert len(data["image"][0]) == 5
+
+    def test_layer_shift_right(self, tmp_path):
+        runner = CliRunner()
+        img_path = str(tmp_path / "layer.png")
+        out = str(tmp_path / "out.json")
+        make_image(img_path, (255, 0, 0), width=4, height=2)
+
+        result = runner.invoke(main, ["-l", f"{img_path}@1", "-o", out, "-sa"])
+        assert result.exit_code == 0
+        data = json.loads(Path(out).read_text())
+        assert data["image"][0][0] is None
+        assert data["image"][0][1:] == ["#ff0000"] * 3
+
+    def test_layer_shift_left(self, tmp_path):
+        runner = CliRunner()
+        img_path = str(tmp_path / "layer.png")
+        out = str(tmp_path / "out.json")
+        make_image(img_path, (0, 255, 0), width=4, height=2)
+
+        result = runner.invoke(main, ["-l", f"{img_path}@-1", "-o", out, "-sa"])
+        assert result.exit_code == 0
+        data = json.loads(Path(out).read_text())
+        assert data["image"][0][:3] == ["#00ff00"] * 3
+        assert data["image"][0][3] is None
+
+    def test_layer_shift_down(self, tmp_path):
+        runner = CliRunner()
+        img_path = str(tmp_path / "layer.png")
+        out = str(tmp_path / "out.json")
+        make_image(img_path, (255, 0, 0), width=2, height=4)
+
+        result = runner.invoke(main, ["-l", f"{img_path}@0,1", "-o", out, "-sa"])
+        assert result.exit_code == 0
+        data = json.loads(Path(out).read_text())
+        assert all(c is None for c in data["image"][0])
+        assert all(c == "#ff0000" for c in data["image"][1])
+
+    def test_layer_pad(self, tmp_path):
+        runner = CliRunner()
+        img_path = str(tmp_path / "layer.png")
+        out = str(tmp_path / "out.json")
+        make_image(img_path, (255, 0, 0), width=2, height=2)
+
+        result = runner.invoke(main, ["-l", f"{img_path}#2,2", "-o", out, "-sa"])
+        assert result.exit_code == 0
+        data = json.loads(Path(out).read_text())
+        assert len(data["image"]) == 4
+        assert len(data["image"][0]) == 4
+        assert data["image"][1][1] == "#ff0000"
+        assert all(c is None for c in data["image"][0])
+        assert data["image"][0][0] is None
+        assert data["image"][3][3] is None
 
     def test_dimension_mismatch(self, tmp_path):
         runner = CliRunner()

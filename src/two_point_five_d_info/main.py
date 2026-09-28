@@ -13,7 +13,48 @@ def luminance(hex_color: str) -> float:
     return 0.299 * r + 0.587 * g + 0.114 * b
 
 
-def parse_layer(value: str) -> Tuple[str, Optional[Tuple[int, int, int, int]]]:
+def parse_layer(
+    value: str,
+) -> Tuple[
+    str,
+    Optional[Tuple[int, int, int, int]],
+    Tuple[int, int],
+    Tuple[int, int],
+]:
+    shift = (0, 0)
+    if "@" in value:
+        value, shift_str = value.rsplit("@", 1)
+        parts = shift_str.split(",")
+        if len(parts) > 2:
+            raise click.BadParameter(
+                f"layer-shift must be 'x' or 'x,y', got '{shift_str}'"
+            )
+        try:
+            shift_x = int(parts[0].strip()) if parts[0].strip() else 0
+            shift_y = int(parts[1].strip()) if len(parts) == 2 and parts[1].strip() else 0
+        except ValueError:
+            raise click.BadParameter(
+                f"layer-shift values must be integers, got '{shift_str}'"
+            )
+        shift = (shift_x, shift_y)
+
+    pad = (0, 0)
+    if "#" in value:
+        value, pad_str = value.rsplit("#", 1)
+        parts = pad_str.split(",")
+        if len(parts) > 2:
+            raise click.BadParameter(
+                f"layer-pad must be 'x' or 'x,y', got '{pad_str}'"
+            )
+        try:
+            pad_x = int(parts[0].strip()) if parts[0].strip() else 0
+            pad_y = int(parts[1].strip()) if len(parts) == 2 and parts[1].strip() else 0
+        except ValueError:
+            raise click.BadParameter(
+                f"layer-pad values must be integers, got '{pad_str}'"
+            )
+        pad = (abs(pad_x), abs(pad_y))
+
     if ":" in value:
         path, crop_str = value.rsplit(":", 1)
         parts = crop_str.split(",")
@@ -27,8 +68,38 @@ def parse_layer(value: str) -> Tuple[str, Optional[Tuple[int, int, int, int]]]:
             raise click.BadParameter(
                 f"crop coordinates must be integers, got '{crop_str}'"
             )
-        return (path, crop)
-    return (value, None)
+        return (path, crop, shift, pad)
+    return (value, None, shift, pad)
+
+
+def pad(img: Image.Image, px: int, py: int) -> Image.Image:
+    if px == 0 and py == 0:
+        return img
+    width, height = img.size
+    left = px // 2
+    right = px - left
+    top = py // 2
+    bottom = py - top
+    out = Image.new("RGBA", (width + px, height + py), (0, 0, 0, 0))
+    out.paste(img, (left, top))
+    return out
+
+
+def shift_layer(img: Image.Image, dx: int, dy: int) -> Image.Image:
+    if dx == 0 and dy == 0:
+        return img
+    width, height = img.size
+    out = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    src_left = max(0, -dx)
+    src_top = max(0, -dy)
+    src_right = min(width, width - dx)
+    src_bottom = min(height, height - dy)
+    if src_left < src_right and src_top < src_bottom:
+        out.paste(
+            img.crop((src_left, src_top, src_right, src_bottom)),
+            (max(0, dx), max(0, dy)),
+        )
+    return out
 
 
 @click.command()
@@ -38,7 +109,7 @@ def parse_layer(value: str) -> Tuple[str, Optional[Tuple[int, int, int, int]]]:
     "--layer",
     required=True,
     multiple=True,
-    help="Image path, optionally with crop: 'path[:left,upper,right,lower]'",
+    help="Image path, optionally with crop, pad and shift: 'path[:left,upper,right,lower][#x,y][@x,y]'",
 )
 @click.option(
     "-o",
@@ -96,15 +167,18 @@ def main(
     """Combine image layers and produce a JSON height map.
 
     Layers are alpha-composited bottom-to-top in the order given.
-    Each -l flag accepts a path with an optional PIL-style crop region
-    after a colon: 'image.png:left,upper,right,lower'.
+    Each -l flag accepts a path with optional crop, pad and shift
+    suffixes, applied in that order (crop -> pad -> shift):
+    'image.png:left,upper,right,lower#x,y@x,y'.
     """
-    layers: List[Tuple[str, Optional[Tuple[int, int, int, int]]]] = [
-        parse_layer(val) for val in layer
-    ]
+    layers: List[
+        Tuple[str, Optional[Tuple[int, int, int, int]], Tuple[int, int], Tuple[int, int]]
+    ] = [parse_layer(val) for val in layer]
 
     images: List[Image.Image] = []
-    for path, crop in layers:
+    for path, crop, shift, pad_val in layers:
+        shift_x, shift_y = shift
+        pad_x, pad_y = pad_val
         try:
             img: Image.Image = Image.open(path)
         except FileNotFoundError:
@@ -117,6 +191,12 @@ def main(
 
         if crop:
             img = img.crop(crop)
+
+        if pad_x or pad_y:
+            img = pad(img, pad_x, pad_y)
+
+        if shift_x or shift_y:
+            img = shift_layer(img, shift_x, shift_y)
 
         images.append(img)
 

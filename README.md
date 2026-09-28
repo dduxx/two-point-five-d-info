@@ -40,11 +40,22 @@ pip install -e .
 
 Layers are alpha-composited bottom-to-top in the order given.
 
+Each layer may also specify optional pad and shift suffixes, applied in order crop -> pad -> shift:
+
+- `#<x>,<y>` pads the layer symmetrically (content centered): `#32,32` adds 32 total pixels to each axis, splitting evenly across both sides (an odd pixel lands bottom/right). Values are magnitude-only, so `#-32` behaves like `#32`.
+- `@<x>,<y>` shifts the layer: a positive `x` shifts right, a negative `x` shifts left; a positive `y` shifts down, a negative `y` shifts up. Dropped rows/columns are replaced with fully transparent pixels. A single value (`@x`) shifts horizontally only.
+
+Both suffixes are optional and independent; omit either when not needed.
+
+```bash
+2point5dinfo -l bottom.png -l top.png@-3 -l overlay.png#32,32@0,2 -o output.json
+```
+
 ### Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-l`/`--layer` | Image path, optionally with crop: `path[:left,upper,right,lower]` | (required, repeatable) |
+| `-l`/`--layer` | Image path, optionally with crop, pad and shift: `path[:left,upper,right,lower][#x,y][@x,y]` | (required, repeatable) |
 | `-o`/`--output` | Path for the output JSON file | (required) |
 | `-p`/`--pixel-height` | Starting height for the darkest color | `3.0` |
 | `-s`/`--pixel-step` | Height increment between each brightness rank | `0.5` |
